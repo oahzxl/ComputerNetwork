@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="PublishConfigData" autoUpload="Always" serverName="zxl@222.20.95.94:43005 agent" remoteFilesAllowedToDisappearOnAutoupload="false" autoUploadExternalChanges="true">
+    <serverData>
+      <paths name="zxl@222.20.95.94:43005 agent">
+        <serverdata>
+          <mappings>
+            <mapping deploy="/home/zxl/QoE/rl" local="$PROJECT_DIR$" />
+          </mappings>
+          <excludedPaths>
+            <excludedPath path="/home/zxl/QoE/rl/sim/cooked_test_traces" />
+            <excludedPath path="/home/zxl/QoE/rl/sim/cooked_traces" />
+            <excludedPath local="true" path="$PROJECT_DIR$/abr_browser_dir" />
+            <excludedPath local="true" path="$PROJECT_DIR$/cooked_traces" />
+            <excludedPath local="true" path="$PROJECT_DIR$/dash.js" />
+            <excludedPath local="true" path="$PROJECT_DIR$/dash_client" />
+            <excludedPath local="true" path="$PROJECT_DIR$/multi_video_sim" />
+            <excludedPath local="true" path="$PROJECT_DIR$/selenium-2.39.0" />
+            <excludedPath local="true" path="$PROJECT_DIR$/real_exp" />
+            <excludedPath local="true" path="$PROJECT_DIR$/rl_server" />
+            <excludedPath local="true" path="$PROJECT_DIR$/run_exp" />
+            <excludedPath local="true" path="$PROJECT_DIR$/traces" />
+            <excludedPath local="true" path="$PROJECT_DIR$/video_server" />
+          </excludedPaths>
+        </serverdata>
+      </paths>
+      <paths name="zxl@222.20.95.94:43005 agent (1)">
+        <serverdata>
+          <mappings>
+            <mapping local="$PROJECT_DIR$" web="/" />
+          </mappings>
+        </serverdata>
+      </paths>
+    </serverData>
+    <option name="myAutoUpload" value="ALWAYS" />
+  </component>
+</project>
