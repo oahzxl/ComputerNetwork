@@ -1,23 +1,25 @@
-import torch
-import torch.nn as nn
-from sim.utils import v_wrap, set_init, push_and_pull, record
-import torch.nn.functional as f
-import torch.multiprocessing as mp
-from sim import load_trace, env
 import os
+
+import env
+import load_trace
 import numpy as np
+import torch
+import torch.multiprocessing as mp
+import torch.nn as nn
+import torch.nn.functional as f
+from utils import push_and_pull, record
 
 os.environ["OMP_NUM_THREADS"] = "1"
 
 UPDATE_GLOBAL_ITER = 5
 LR = 1e-4
-GAMMA = 0.9
-MAX_EP = 3000
+GAMMA = 0.99
+LOSS_WEIGHT = 0.5
+
+MAX_EP = 5000
 N_S = 6  # bit_rate, buffer_size, next_chunk_size, bandwidth_measurement(throughput and time), chunk_til_video_end
 S_LEN = 8  # take how many frames in the past
 N_A = 6
-ACTOR_LR_RATE = 0.0001
-CRITIC_LR_RATE = 0.001
 NUM_AGENTS = 16
 TRAIN_SEQ_LEN = 100  # take as a train batch
 MODEL_SAVE_INTERVAL = 100
@@ -35,8 +37,6 @@ SUMMARY_DIR = './results'
 LOG_FILE = './results/log'
 TEST_LOG_FOLDER = './test_results/'
 TRAIN_TRACES = './cooked_traces/'
-# NN_MODEL = './results/pretrain_linear_reward.ckpt'
-NN_MODEL = None
 
 
 class SharedAdam(torch.optim.Adam):
@@ -56,7 +56,7 @@ class SharedAdam(torch.optim.Adam):
                 state['exp_avg_sq'].share_memory_()
 
 
-class Cat(torch.distributions.Categorical):
+class Sampler(torch.distributions.Categorical):
     def log_prob(self, value):
         if self._validate_args:
             self._validate_sample(value)
@@ -72,43 +72,48 @@ class Net(nn.Module):
         self.s_dim = s_dim
         self.a_dim = a_dim
         self.s_len = s_len
-        self.pi1 = nn.Linear(s_dim * s_len, 128)
-        self.pi2 = nn.Linear(128, a_dim)
 
-        self.p1 = nn.Sequential(
+        self.actor1 = nn.Sequential(
             nn.Conv1d(6, 16, kernel_size=2, stride=1, padding=1),
             nn.ReLU(inplace=True),
-        )
-        self.p2 = nn.Sequential(
-            nn.Linear(16 * 9, 128),
+            nn.Conv1d(16, 64, kernel_size=2, stride=1, padding=1),
             nn.ReLU(inplace=True),
-            nn.Linear(128, 1)
+            nn.Conv1d(64, 128, kernel_size=2, stride=1, padding=1),
+            nn.ReLU(inplace=True),
+        )
+        self.actor2 = nn.Sequential(
+            nn.Linear(128 * 11, 128),
+            nn.ReLU(inplace=True),
+            nn.Linear(128, a_dim)
         )
 
-        self.v1 = nn.Sequential(
+        self.critic1 = nn.Sequential(
             nn.Conv1d(6, 16, kernel_size=2, stride=1, padding=1),
             nn.ReLU(inplace=True),
+            nn.Conv1d(16, 64, kernel_size=2, stride=1, padding=1),
+            nn.ReLU(inplace=True),
+            nn.Conv1d(64, 128, kernel_size=2, stride=1, padding=1),
+            nn.ReLU(inplace=True),
         )
-        self.v2 = nn.Sequential(
-            nn.Linear(16 * 9, 128),
+        self.critic2 = nn.Sequential(
+            nn.Linear(128 * 11, 128),
             nn.ReLU(inplace=True),
             nn.Linear(128, 1)
         )
 
         # set_init([self.pi1, self.pi2, self.v1, self.v2])
-        # self.distribution = torch.distributions.Categorical
-        self.distribution = Cat
+        self.distribution = Sampler
 
     def forward(self, x):
         if len(x.shape) == 2:
             x = x.unsqueeze(0)
-        logits = self.p1(x)
+        logits = self.actor1(x)
         logits = logits.view(logits.size(0), -1)
-        logits = self.p2(logits)
+        logits = self.actor2(logits)
 
-        values = self.v1(x)
+        values = self.critic1(x)
         values = values.view(values.size(0), -1)
-        values = self.p2(values)
+        values = self.critic2(values)
         return logits, values
 
     def choose_action(self, s):
@@ -125,22 +130,22 @@ class Net(nn.Module):
         # v_t = v_t.squeeze(-1)
         # values = values.squeeze(-1)
         td = v_t.squeeze(-1).squeeze(-1) - values.squeeze(-1)
-        c_loss = td.pow(2)
+        c_loss = td.pow(2) / 10
 
         probs = f.softmax(logits, dim=1)
 
         m = self.distribution(probs)
         exp_v = m.log_prob(a) * td.detach()
         a_loss = -exp_v
-        total_loss = (c_loss + a_loss).mean()
+        total_loss = (c_loss + LOSS_WEIGHT * a_loss).mean()
         return total_loss
 
 
 class Worker(mp.Process):
-    def __init__(self, g_net_, opt_, global_ep_, global_ep_r_, res_queue_, name_):
+    def __init__(self, g_net_, opt_, global_ep_, global_ep_r_, global_ep_max_, res_queue_, name_):
         super(Worker, self).__init__()
         self.name = 'w%02i' % name_
-        self.g_ep, self.g_ep_r, self.res_queue = global_ep_, global_ep_r_, res_queue_
+        self.g_ep, self.g_ep_r, self.g_ep_max, self.res_queue = global_ep_, global_ep_r_, global_ep_max_, res_queue_
         self.g_net, self.opt = g_net_, opt_
         self.l_net = Net(N_S, N_A, S_LEN)  # local network
         self.env = env.Environment(all_cooked_time=all_cooked_time,
@@ -230,7 +235,7 @@ class Worker(mp.Process):
                     buffer_s, buffer_a, buffer_r = [torch.zeros((N_S, S_LEN))], [action_vec], []
 
                     if end_of_video:  # done and print information
-                        record(self.g_ep, self.g_ep_r, ep_r, self.res_queue, self.name)
+                        record(self.g_ep, self.g_ep_r, self.g_ep_max, ep_r, self.res_queue, self.name)
                         break
                 total_step += 1
         self.res_queue.put(None)
@@ -242,10 +247,12 @@ if __name__ == "__main__":
     global_net = Net(N_S, N_A, S_LEN)  # global network
     global_net.share_memory()  # share the global parameters in multiprocessing
     opt = SharedAdam(global_net.parameters(), lr=LR)  # global optimizer
-    global_ep, global_ep_r, res_queue = mp.Value('i', 0), mp.Value('d', 0.), mp.Queue()
+    global_ep, global_ep_r, global_ep_max, res_queue = mp.Value('i', 0), mp.Value('d', 0.), \
+        mp.Value('d', -999.), mp.Queue()
 
     # parallel training
-    workers = [Worker(global_net, opt, global_ep, global_ep_r, res_queue, i) for i in range(mp.cpu_count())]
+    workers = [Worker(global_net, opt, global_ep, global_ep_r, global_ep_max, res_queue, i)
+               for i in range(mp.cpu_count())]
     [w.start() for w in workers]
     res = []  # record episode reward to plot
     while True:

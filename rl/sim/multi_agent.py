@@ -4,7 +4,7 @@ import numpy as np
 import multiprocessing as mp
 
 import tensorflow as tf
-from sim import a3c, load_trace, env
+import a3c, load_trace, env
 
 os.environ['CUDA_VISIBLE_DEVICES'] = '2'
 
@@ -30,8 +30,8 @@ SUMMARY_DIR = './results'
 LOG_FILE = './results/log'
 TEST_LOG_FOLDER = './test_results/'
 TRAIN_TRACES = './cooked_traces/'
-# NN_MODEL = './results/pretrain_linear_reward.ckpt'
-NN_MODEL = None
+NN_MODEL = './results/pretrain_linear_reward.ckpt'
+# NN_MODEL = None
 
 
 def testing(epoch, nn_model, log_file):
@@ -162,7 +162,7 @@ def central_agent(net_params_queues, exp_queues):
 
             # log training information
             epoch += 1
-            avg_reward = total_reward / total_agents
+            avg_reward = total_reward / total_batch_len
             avg_td_loss = total_td_loss / total_batch_len
             avg_entropy = total_entropy / total_batch_len
 
